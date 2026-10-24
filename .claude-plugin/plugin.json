@@ -1,0 +1,10 @@
+{
+  "name": "delegation",
+  "version": "0.1.0",
+  "description": "Pick model and effort for subagents, workflow agents and new sessions, plus a saved delegation note",
+  "types": "./types/index.d.ts",
+  "license": "MIT",
+  "author": {
+    "name": "anas1412"
+  }
+}

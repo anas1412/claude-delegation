@@ -1,0 +1,6 @@
+{
+  "name": "claude-delegation",
+  "owner": { "name": "anas1412" },
+  "description": "Model and effort pickers for Claude Code delegation",
+  "plugins": [{ "name": "delegation", "source": "./" }]
+}
