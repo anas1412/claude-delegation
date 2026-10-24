@@ -17,6 +17,14 @@ const PANE = {
 
 test('picked model reaches Agent calls; note reaches the prompt', async ($, on) => {
   mock.store(on)
+  mock.clock(on)
+  let sessionRunning = false
+  on('mcp.call', () => ({
+    value: {
+      content: [{ type: 'text', text: JSON.stringify([{ startedBy: 'me', isRunning: sessionRunning }]) }],
+      isError: false,
+    },
+  }))
   let sent: unknown
   on('command.register', () => ({ value: { command: 'delegation' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
@@ -25,6 +33,13 @@ test('picked model reaches Agent calls; note reaches the prompt', async ($, on) 
     return { result: {} }
   })
   on('prompt.compose', () => ({ sections: [] }))
+  on('agent.list', () => ({ value: [{ id: 'a1', description: 'd', type: 'Explore', status: 'running' }] }))
+  on('turn.start', () => ({ turnId: 't' }))
+  on('turn.complete', () => ({ text: '' }))
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
 
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   const ui = await $.ui.mount(PANE)
@@ -42,12 +57,32 @@ test('picked model reaches Agent calls; note reaches the prompt', async ($, on) 
   await $.tool.call({ tool: 'mcp__ccd_session__start_session', title: 't', context: 'fork' } as never)
   expect((sent as { model?: string }).model).toBeUndefined()
 
-  const hint = await $.ui.mount({
-    plugin: 'delegation', component: 'PromptHint', requestId: 'hint', surface: 'desktop',
-    props: { isDraft: false, isWorking: false, hint: '' },
-  } as never)
-  expect(await hint.find({ type: 'Button', key: 'open' })).toBeDefined()
-  await hint.unmount()
+  const BAND = {
+    plugin: 'delegation', component: 'AbovePrompt', requestId: 'band', surface: 'desktop',
+    props: { hasSurvey: false, isWorking: true, maxRows: 3, bodyColumns: 80, scroll: { offset: 0, bodyRows: 3 } },
+  } as never
+
+  let band = await $.ui.mount(BAND)
+  expect(await band.find({ type: 'Text', text: /Delegation/ })).toBeUndefined()
+  await band.unmount()
+
+  await $.turn.start({ agentId: 'a1' } as never)
+  band = await $.ui.mount(BAND)
+  expect((await band.find({ type: 'Text', text: /Agents 1/ }))?.text).toContain('Agents 1 · haiku')
+  await band.unmount()
+
+  sessionRunning = true
+  await $.tool.call({ tool: 'mcp__ccd_session__start_session', title: 't2' } as never)
+  band = await $.ui.mount(BAND)
+  expect((await band.find({ type: 'Text', text: /Nested sessions 1/ }))?.text).toContain('Nested sessions 1 · sonnet · low')
+  await band.unmount()
+  sessionRunning = false
+  await $.tool.call({ tool: 'mcp__ccd_session__start_session', title: 't3' } as never)
+
+  await $.turn.complete({ agentId: 'a1' } as never)
+  band = await $.ui.mount(BAND)
+  expect(await band.find({ type: 'Text', text: /Delegation/ })).toBeUndefined()
+  await band.unmount()
 
   const { sections } = await $.prompt.compose({
     model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [],

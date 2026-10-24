@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Prefs } from '../types'
+import type { Prefs, Running } from '../types'
 
 const PANE = 'delegation'
 const AUTO = 'auto'
@@ -24,7 +24,10 @@ const DEFAULTS: Prefs = {
   note: '',
 }
 
+type SessionRow = { startedBy?: string; isRunning?: boolean }
+
 type Group = {
+  kind: keyof Running
   title: string
   hint: string
   model: keyof Prefs
@@ -32,18 +35,21 @@ type Group = {
 }
 const GROUPS: Group[] = [
   {
+    kind: 'agents',
     title: 'Agents',
     hint: 'Subagents Claude starts with the Agent tool. Enforced.',
     model: 'agentModel',
     effort: 'agentEffort',
   },
   {
+    kind: 'workflow',
     title: 'Workflow agents',
     hint: 'Each agent() in a workflow script. Sent as instructions: Workflow has no model field to enforce.',
     model: 'workflowModel',
     effort: 'workflowEffort',
   },
   {
+    kind: 'sessions',
     title: 'Nested sessions',
     hint: 'New sessions Claude starts. Enforced on fresh sessions, capped at this session’s model and effort; forks inherit.',
     model: 'sessionModel',
@@ -52,6 +58,11 @@ const GROUPS: Group[] = [
 ]
 
 const prefs = atom({ plugin: 'delegation', key: 'prefs' } as const, DEFAULTS)
+const running = atom({ plugin: 'delegation', key: 'running' } as const, {
+  agents: 0,
+  workflow: 0,
+  sessions: 0,
+} as Running)
 
 const set = (b: EngineInterface, patch: Partial<Prefs>) =>
   update(b, prefs, p => {
@@ -79,7 +90,31 @@ const section = (p: Prefs) => {
     .join('\n')
 }
 
-const openPane = ($: EngineInterface) => $.ui.open({ id: PANE, title: 'Delegation' })
+// Running counts. Subagent and workflow-agent loops show up as turns with an
+// agentId; only Agent-tool agents are in $.agent.list(). Nested sessions run
+// in their own process, so they are polled while any is running.
+const loops = new Map<string, 'agents' | 'workflow'>()
+let hasWorkflow = false
+let poll: { cancel: () => void } | undefined
+
+const recount = ($: EngineInterface) =>
+  update($, running, r => ({
+    ...r,
+    agents: [...loops.values()].filter(k => k === 'agents').length,
+    workflow: [...loops.values()].filter(k => k === 'workflow').length,
+  }))
+
+const pollSessions = async ($: EngineInterface) => {
+  const res = await $.mcp.call('ccd_session_mgmt', 'list_sessions', { linked: true })
+  const block = res.content[0]
+  const rows = block?.type === 'text' ? (JSON.parse(block.text ?? '[]') as SessionRow[]) : []
+  const sessions = rows.filter(r => r.startedBy && r.isRunning).length
+  await update($, running, r => ({ ...r, sessions }))
+  if (sessions === 0) {
+    poll?.cancel()
+    poll = undefined
+  }
+}
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -93,7 +128,7 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'delegation' }, async $ => {
-    await openPane($)
+    await $.ui.open({ id: PANE, title: 'Delegation' })
     return { text: 'Delegation pane opened.' }
   })
 
@@ -126,16 +161,55 @@ export const register: Register = on => {
     })
   }).catch(($, e, next) => next(e))
 
-  // The footer line under the prompt, beside the permission mode picker.
-  on('ui.render', { component: 'PromptHint' }, ($, e) => {
-    const { Box, Text, Button } = $.ui.resolve(e)
+  on('tool.call', { tool: 'Workflow' }, ($, e, next) => {
+    hasWorkflow = true
+    return next(e)
+  })
+
+  on('tool.call', { tool: 'mcp__ccd_session__start_session' }, async ($, e, next) => {
+    const ran = await next(e)
+    // ponytail: 20s poll of list_sessions; switch to an event if the app ever raises one.
+    poll ??= $.clock.every(20_000, () => void pollSessions($).catch(() => {}))
+    void pollSessions($).catch(() => {})
+    return ran
+  })
+
+  on('turn.start', async ($, e, next) => {
+    const id = e.agentId
+    if (id !== undefined) {
+      const isAgent = (await $.agent.list()).some(a => a.id === id)
+      // Unlisted loops are workflow agents or the engine's own forks (compaction).
+      if (isAgent || hasWorkflow) {
+        loops.set(id, isAgent ? 'agents' : 'workflow')
+        await recount($)
+      }
+    }
+    return next(e)
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    if (e.agentId !== undefined && loops.delete(e.agentId)) await recount($)
+    return next(e)
+  })
+
+  // Above the prompt, only while delegated work runs and the user set something.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const p = await read($, prefs)
+    const r = await read($, running)
+    const active = GROUPS.filter(g => r[g.kind] > 0)
+    if (e.props.hasSurvey || active.length === 0 || JSON.stringify(p) === JSON.stringify(DEFAULTS)) {
+      return next(e)
+    }
+    const { Text } = $.ui.resolve(e)
+
     return (
-      <Box flexDirection="row" gap={2}>
-        {e.props.hint !== '' && <Text dimColor>{e.props.hint}</Text>}
-        <Button key="open" plain onPress={() => openPane($)}>
-          Delegation
-        </Button>
-      </Box>
+      <Text>
+        <Text color="claude">◆</Text> Delegation{'  '}
+        <Text dimColor>
+          {active.map(g => `${g.title} ${r[g.kind]} · ${label(p, g)}`).join('   ')}
+          {p.note.trim() ? '   · note on' : ''}
+        </Text>
+      </Text>
     )
   })
 

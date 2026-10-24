@@ -4,7 +4,7 @@ A Claude Code mod that lets you pick the **model** and **effort** Claude uses wh
 
 ## What it does
 
-A **Delegation** button sits in the footer under the prompt box, next to the permission mode. Click it, or run `/delegation`, to open the side pane:
+Run `/delegation` to open the side pane:
 
 - **Agents**: model and effort for Agent tool subagents.
 - **Workflow agents**: model and effort for the agents a Workflow script spawns.
@@ -18,6 +18,8 @@ A **Delegation** button sits in the footer under the prompt box, next to the per
   ```
 
 Every picker defaults to `auto`, which leaves the choice to Claude. **Reset all** puts everything back to `auto`.
+
+While agents, workflow agents or nested sessions are running, a line above the prompt shows what they run with (`◆ Delegation  Agents 2 · haiku   Nested sessions 1 · sonnet · low`). It stays hidden when nothing is running or every setting is on `auto`.
 
 ## How it applies
 

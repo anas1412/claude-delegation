@@ -8,8 +8,10 @@ export type Prefs = {
   note: string
 }
 
+export type Running = { agents: number; workflow: number; sessions: number }
+
 declare module 'claude-code' {
   interface PluginState {
-    delegation: { prefs: Prefs }
+    delegation: { prefs: Prefs; running: Running }
   }
 }
