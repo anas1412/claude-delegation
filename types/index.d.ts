@@ -4,6 +4,7 @@ export type Prefs = {
   workflowModel: string
   workflowEffort: string
   sessionModel: string
+  sessionEffort: string
   note: string
 }
 

@@ -7,14 +7,53 @@ const PANE = 'delegation'
 const AUTO = 'auto'
 const MODELS = [AUTO, 'fable', 'opus', 'sonnet', 'haiku']
 const EFFORTS = [AUTO, 'low', 'medium', 'high', 'xhigh', 'max']
+// start_session takes full ids, not aliases.
+const MODEL_IDS: Record<string, string> = {
+  fable: 'claude-fable-5-1',
+  opus: 'claude-opus-5-5',
+  sonnet: 'claude-sonnet-5-5',
+  haiku: 'claude-haiku-5-5',
+}
 const DEFAULTS: Prefs = {
   agentModel: AUTO,
   agentEffort: AUTO,
   workflowModel: AUTO,
   workflowEffort: AUTO,
   sessionModel: AUTO,
+  sessionEffort: AUTO,
   note: '',
 }
+
+type Group = {
+  title: string
+  short: string
+  hint: string
+  model: keyof Prefs
+  effort: keyof Prefs
+}
+const GROUPS: Group[] = [
+  {
+    title: 'Agents',
+    short: 'Agents',
+    hint: 'Subagents Claude starts with the Agent tool. Enforced.',
+    model: 'agentModel',
+    effort: 'agentEffort',
+  },
+  {
+    title: 'Workflow agents',
+    short: 'Workflows',
+    hint: 'Each agent() in a workflow script. Sent as instructions: Workflow has no model field to enforce.',
+    model: 'workflowModel',
+    effort: 'workflowEffort',
+  },
+  {
+    title: 'Nested sessions',
+    short: 'Sessions',
+    hint: 'New sessions Claude starts. Enforced on fresh sessions, capped at this session’s model and effort; forks inherit.',
+    model: 'sessionModel',
+    effort: 'sessionEffort',
+  },
+]
 
 const prefs = atom({ plugin: 'delegation', key: 'prefs' } as const, DEFAULTS)
 
@@ -27,22 +66,24 @@ const set = (b: EngineInterface, patch: Partial<Prefs>) =>
 
 const pick = (v: string) => (v === AUTO ? undefined : v)
 
+const label = (p: Prefs, g: Group) =>
+  [p[g.model], p[g.effort]].filter(v => v !== AUTO).join(' · ') || AUTO
+
 const section = (p: Prefs) => {
-  const lines = [
-    `- Agent tool subagents: model ${p.agentModel}, effort ${p.agentEffort}`,
-    `- Workflow agents: model ${p.workflowModel}, effort ${p.workflowEffort}. When writing a Workflow script, put these in every agent() call's opts unless "auto".`,
-    `- New sessions (start_session): model ${p.sessionModel}`,
-  ]
   const note = p.note.trim()
   return [
     'The user picked these models and effort levels for delegated work ("auto" means choose yourself). They override any default rule about which model agents use.',
-    ...lines,
+    `- Agent tool subagents: model ${p.agentModel}, effort ${p.agentEffort}`,
+    `- Workflow agents: model ${p.workflowModel}, effort ${p.workflowEffort}. When writing a Workflow script, put these in every agent() call's opts unless "auto".`,
+    `- New sessions (start_session): model ${p.sessionModel}, effort ${p.sessionEffort}`,
     note &&
       `The user's delegation note: follow it when splitting work into agents, workflow tasks or sessions (e.g. which model each kind of task gets):\n${note}`,
   ]
     .filter(Boolean)
     .join('\n')
 }
+
+const openPane = ($: EngineInterface) => $.ui.open({ id: PANE, title: 'Delegation' })
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -56,7 +97,7 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'delegation' }, async $ => {
-    await $.ui.open({ id: PANE, title: 'Delegation' })
+    await openPane($)
     return { text: 'Delegation pane opened.' }
   })
 
@@ -68,7 +109,6 @@ export const register: Register = on => {
     }
   })
 
-  // Hard overrides where the tool takes the field; workflows rely on the prompt section.
   on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
     const p = await read($, prefs)
     const model = pick(p.agentModel) as typeof e.model
@@ -77,47 +117,122 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('tool.call', { tool: 'mcp__ccd_session__start_session' }, async ($, e, next) => {
-    const model = pick((await read($, prefs)).sessionModel)
-    return next(model ? { ...e, model } : e)
+    const input = e as typeof e & { context?: string; proposal_id?: string }
+    // model/effort apply to fresh sessions only; a proposal starts exactly as proposed.
+    if (input.context === 'fork' || input.proposal_id) return next(e)
+    const p = await read($, prefs)
+    const model = pick(p.sessionModel)
+    const effort = pick(p.sessionEffort)
+    return next({
+      ...e,
+      ...(model && { model: MODEL_IDS[model] }),
+      ...(effort && { effort }),
+    })
   }).catch(($, e, next) => next(e))
+
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey) return next(e)
+    const { Text, Button } = $.ui.resolve(e)
+    const p = await read($, prefs)
+    const custom = GROUPS.filter(g => label(p, g) !== AUTO)
+    const summary = custom.length
+      ? custom.map(g => `${g.short} ${label(p, g)}`).join('  ·  ')
+      : 'Claude decides'
+
+    return (
+      <Button key="open" plain onPress={() => openPane($)}>
+        <Text color="claude">◆</Text> Delegation <Text dimColor>{summary}</Text>
+        {p.note.trim() ? <Text dimColor>  ·  note on</Text> : ''}
+      </Button>
+    )
+  })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     if (e.surface === 'mobile') {
       const { Text } = $.ui.resolve(e)
       return <Text dimColor>Open /delegation on desktop or terminal to edit.</Text>
     }
-    const { Box, Text, Select, Input } = $.ui.resolve(e)
+    const { Box, Text, Select, Input, Button } = $.ui.resolve(e)
     const p = await read($, prefs)
-    const sel = (key: keyof Prefs, label: string, list: string[]) => (
+    const select = (key: keyof Prefs, title: string, list: string[]) => (
       <Select
         key={key}
-        label={label}
+        label={title}
         value={p[key]}
-        options={list.map(value => ({ value }))}
+        options={list.map(value => ({ value, label: value === AUTO ? 'Auto' : value }))}
         onSelect={value => set($, { [key]: value })}
       />
     )
+    const hasNote = p.note.trim() !== ''
+    const isDefault = JSON.stringify(p) === JSON.stringify(DEFAULTS)
 
     return (
-      <Box flexDirection="column" gap={1}>
-        <Text bold>Agents</Text>
-        {sel('agentModel', 'Model', MODELS)}
-        {sel('agentEffort', 'Effort', EFFORTS)}
-        <Text bold>Workflow agents</Text>
-        {sel('workflowModel', 'Model', MODELS)}
-        {sel('workflowEffort', 'Effort', EFFORTS)}
-        <Text bold>Nested sessions</Text>
-        {sel('sessionModel', 'Model', MODELS)}
-        <Text bold>Note (saved as you type, sent with every request)</Text>
-        <Input
-          key="note"
-          rows={6}
-          value={p.note}
-          placeholder={'planning/review: opus high\ncoding: sonnet medium\nsearch/reading: haiku low'}
-          submitLabel="save"
-          onInput={note => set($, { note })}
-          onSubmit={note => set($, { note })}
-        />
+      <Box flexDirection="column" gap="md">
+        <Text dimColor size="footnote">
+          Choose how Claude delegates. Auto leaves the choice to Claude.
+        </Text>
+
+        {GROUPS.map(g => {
+          const value = label(p, g)
+          const isAuto = value === AUTO
+          return (
+            <Box
+              key={g.title}
+              flexDirection="column"
+              gap="sm"
+              padding="sm"
+              borderStyle="round"
+              borderColor={isAuto ? 'subtle' : 'claude'}
+            >
+              <Box flexDirection="row" justifyContent="space-between">
+                <Text weight="semibold">{g.title}</Text>
+                <Text size="caption" color={isAuto ? 'subtle' : 'claude'}>
+                  {isAuto ? 'Auto' : value}
+                </Text>
+              </Box>
+              <Text dimColor size="caption">
+                {g.hint}
+              </Text>
+              <Box flexDirection="row" flexWrap="wrap" gap="md">
+                {select(g.model, 'Model', MODELS)}
+                {select(g.effort, 'Effort', EFFORTS)}
+              </Box>
+            </Box>
+          )
+        })}
+
+        <Box
+          flexDirection="column"
+          gap="sm"
+          padding="sm"
+          borderStyle="round"
+          borderColor={hasNote ? 'claude' : 'subtle'}
+        >
+          <Box flexDirection="row" justifyContent="space-between">
+            <Text weight="semibold">Delegation note</Text>
+            <Text size="caption" color={hasNote ? 'success' : 'subtle'}>
+              {hasNote ? 'Saved' : 'Empty'}
+            </Text>
+          </Box>
+          <Text dimColor size="caption">
+            Sent with every request. Say which model each kind of task should get.
+          </Text>
+          <Input
+            key="note"
+            rows={5}
+            value={p.note}
+            placeholder={'planning/review: opus high\ncoding: sonnet medium\nsearch/reading: haiku low'}
+            submitLabel="save"
+            onInput={note => set($, { note })}
+            onSubmit={note => set($, { note })}
+          />
+        </Box>
+
+        {!isDefault && (
+          <Box flexDirection="row" justifyContent="flex-end">
+            <Button key="reset" label="Reset all" onPress={() => set($, DEFAULTS)} />
+          </Box>
+        )}
       </Box>
     )
   })
