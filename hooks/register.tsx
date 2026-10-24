@@ -26,7 +26,6 @@ const DEFAULTS: Prefs = {
 
 type Group = {
   title: string
-  short: string
   hint: string
   model: keyof Prefs
   effort: keyof Prefs
@@ -34,21 +33,18 @@ type Group = {
 const GROUPS: Group[] = [
   {
     title: 'Agents',
-    short: 'Agents',
     hint: 'Subagents Claude starts with the Agent tool. Enforced.',
     model: 'agentModel',
     effort: 'agentEffort',
   },
   {
     title: 'Workflow agents',
-    short: 'Workflows',
     hint: 'Each agent() in a workflow script. Sent as instructions: Workflow has no model field to enforce.',
     model: 'workflowModel',
     effort: 'workflowEffort',
   },
   {
     title: 'Nested sessions',
-    short: 'Sessions',
     hint: 'New sessions Claude starts. Enforced on fresh sessions, capped at this session’s model and effort; forks inherit.',
     model: 'sessionModel',
     effort: 'sessionEffort',
@@ -130,20 +126,16 @@ export const register: Register = on => {
     })
   }).catch(($, e, next) => next(e))
 
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey) return next(e)
-    const { Text, Button } = $.ui.resolve(e)
-    const p = await read($, prefs)
-    const custom = GROUPS.filter(g => label(p, g) !== AUTO)
-    const summary = custom.length
-      ? custom.map(g => `${g.short} ${label(p, g)}`).join('  ·  ')
-      : 'Claude decides'
-
+  // The footer line under the prompt, beside the permission mode picker.
+  on('ui.render', { component: 'PromptHint' }, ($, e) => {
+    const { Box, Text, Button } = $.ui.resolve(e)
     return (
-      <Button key="open" plain onPress={() => openPane($)}>
-        <Text color="claude">◆</Text> Delegation <Text dimColor>{summary}</Text>
-        {p.note.trim() ? <Text dimColor>  ·  note on</Text> : ''}
-      </Button>
+      <Box flexDirection="row" gap={2}>
+        {e.props.hint !== '' && <Text dimColor>{e.props.hint}</Text>}
+        <Button key="open" plain onPress={() => openPane($)}>
+          Delegation
+        </Button>
+      </Box>
     )
   })
 

@@ -4,7 +4,7 @@ A Claude Code mod that lets you pick the **model** and **effort** Claude uses wh
 
 ## What it does
 
-A one-line **Delegation** button sits above the prompt box, summing up what's set (`Agents opus · high · Sessions sonnet · note on`, or `Claude decides`). Click it, or run `/delegation`, to open the pane:
+A **Delegation** button sits in the footer under the prompt box, next to the permission mode. Click it, or run `/delegation`, to open the side pane:
 
 - **Agents**: model and effort for Agent tool subagents.
 - **Workflow agents**: model and effort for the agents a Workflow script spawns.

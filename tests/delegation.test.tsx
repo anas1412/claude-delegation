@@ -42,12 +42,12 @@ test('picked model reaches Agent calls; note reaches the prompt', async ($, on) 
   await $.tool.call({ tool: 'mcp__ccd_session__start_session', title: 't', context: 'fork' } as never)
   expect((sent as { model?: string }).model).toBeUndefined()
 
-  const band = await $.ui.mount({
-    plugin: 'delegation', component: 'AbovePrompt', requestId: 'band', surface: 'desktop',
-    props: { hasSurvey: false, isWorking: false, maxRows: 3, bodyColumns: 80, scroll: { offset: 0, bodyRows: 3 } },
+  const hint = await $.ui.mount({
+    plugin: 'delegation', component: 'PromptHint', requestId: 'hint', surface: 'desktop',
+    props: { isDraft: false, isWorking: false, hint: '' },
   } as never)
-  expect((await band.find({ type: 'Text', text: /Agents haiku/ }))?.text).toContain('Sessions sonnet · low')
-  await band.unmount()
+  expect(await hint.find({ type: 'Button', key: 'open' })).toBeDefined()
+  await hint.unmount()
 
   const { sections } = await $.prompt.compose({
     model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [],
